@@ -107,4 +107,6 @@ type Exporter struct {
 	db *sql.DB
 
 	logger log.Logger
+
+	databaseAllowlist []string
 }

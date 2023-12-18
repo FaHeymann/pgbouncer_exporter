@@ -16,6 +16,7 @@ package main
 import (
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/go-kit/log/level"
@@ -45,9 +46,10 @@ func main() {
 	flag.AddFlags(kingpin.CommandLine, promlogConfig)
 
 	var (
-		connectionStringPointer = kingpin.Flag("pgBouncer.connectionString", "Connection string for accessing pgBouncer.").Default("postgres://postgres:@localhost:6543/pgbouncer?sslmode=disable").String()
-		metricsPath             = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
-		pidFilePath             = kingpin.Flag("pgBouncer.pid-file", pidFileHelpText).Default("").String()
+		connectionStringPointer  = kingpin.Flag("pgBouncer.connectionString", "Connection string for accessing pgBouncer.").Default("postgres://postgres:@localhost:6543/pgbouncer?sslmode=disable").String()
+		metricsPath              = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
+		pidFilePath              = kingpin.Flag("pgBouncer.pid-file", pidFileHelpText).Default("").String()
+		databaseAllowlistPointer = kingpin.Flag("pgBouncer.database-allowlist", "todo").String()
 	)
 
 	toolkitFlags := kingpinflag.AddFlags(kingpin.CommandLine, ":9127")
@@ -59,7 +61,11 @@ func main() {
 	logger := promlog.New(promlogConfig)
 
 	connectionString := *connectionStringPointer
-	exporter := NewExporter(connectionString, namespace, logger)
+	databaseAllowlist := strings.Split(strings.TrimSpace(*databaseAllowlistPointer), ",")
+	if strings.TrimSpace(*databaseAllowlistPointer) == "" {
+		databaseAllowlist = []string{}
+	}
+	exporter := NewExporter(connectionString, databaseAllowlist, namespace, logger)
 	prometheus.MustRegister(exporter)
 	prometheus.MustRegister(version.NewCollector("pgbouncer_exporter"))
 

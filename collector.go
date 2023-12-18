@@ -130,7 +130,7 @@ var (
 	)
 )
 
-func NewExporter(connectionString string, namespace string, logger log.Logger) *Exporter {
+func NewExporter(connectionString string, databaseAllowlist []string, namespace string, logger log.Logger) *Exporter {
 
 	db, err := getDB(connectionString)
 
@@ -140,9 +140,10 @@ func NewExporter(connectionString string, namespace string, logger log.Logger) *
 	}
 
 	return &Exporter{
-		metricMap: makeDescMap(metricMaps, namespace, logger),
-		db:        db,
-		logger:    logger,
+		databaseAllowlist: databaseAllowlist,
+		metricMap:         makeDescMap(metricMaps, namespace, logger),
+		db:                db,
+		logger:            logger,
 	}
 }
 
@@ -234,7 +235,7 @@ func queryShowConfig(ch chan<- prometheus.Metric, db *sql.DB, logger log.Logger)
 
 // Query within a namespace mapping and emit metrics. Returns fatal errors if
 // the scrape fails, and a slice of errors if they were non-fatal.
-func queryNamespaceMapping(ch chan<- prometheus.Metric, db *sql.DB, namespace string, mapping MetricMapNamespace, logger log.Logger) ([]error, error) {
+func queryNamespaceMapping(ch chan<- prometheus.Metric, db *sql.DB, namespace string, databaseAllowlist []string, mapping MetricMapNamespace, logger log.Logger) ([]error, error) {
 	query := fmt.Sprintf("SHOW %s;", namespace)
 
 	// Don't fail on a bad scrape of one metric
@@ -247,6 +248,7 @@ func queryNamespaceMapping(ch chan<- prometheus.Metric, db *sql.DB, namespace st
 
 	var columnNames []string
 	columnNames, err = rows.Columns()
+
 	if err != nil {
 		return []error{}, fmt.Errorf("error retrieving column list for: %v, error: %w", namespace, err)
 	}
@@ -270,6 +272,19 @@ func queryNamespaceMapping(ch chan<- prometheus.Metric, db *sql.DB, namespace st
 		err = rows.Scan(scanArgs...)
 		if err != nil {
 			return []error{}, fmt.Errorf("error retrieving rows: %v, error: %w", namespace, err)
+		}
+		includeDatabase := len(databaseAllowlist) == 0
+		for _, allowlistEntry := range databaseAllowlist {
+			if allowlistEntry == columnData[columnIdx["database"]] {
+				includeDatabase = true
+			}
+			if allowlistEntry == columnData[columnIdx["name"]] {
+				includeDatabase = true
+			}
+		}
+
+		if !includeDatabase {
+			continue
 		}
 
 		for i, label := range mapping.labels {
@@ -378,13 +393,13 @@ func dbToFloat64(t interface{}, factor float64) (float64, bool) {
 }
 
 // Iterate through all the namespace mappings in the exporter and run their queries.
-func queryNamespaceMappings(ch chan<- prometheus.Metric, db *sql.DB, metricMap map[string]MetricMapNamespace, logger log.Logger) map[string]error {
+func queryNamespaceMappings(ch chan<- prometheus.Metric, db *sql.DB, databaseAllowlist []string, metricMap map[string]MetricMapNamespace, logger log.Logger) map[string]error {
 	// Return a map of namespace -> errors
 	namespaceErrors := make(map[string]error)
 
 	for namespace, mapping := range metricMap {
 		level.Debug(logger).Log("msg", "Querying namespace", "namespace", namespace)
-		nonFatalErrors, err := queryNamespaceMapping(ch, db, namespace, mapping, logger)
+		nonFatalErrors, err := queryNamespaceMapping(ch, db, namespace, databaseAllowlist, mapping, logger)
 		// Serious error - a namespace disappeard
 		if err != nil {
 			namespaceErrors[namespace] = err
@@ -486,7 +501,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		up = 0
 	}
 
-	errMap := queryNamespaceMappings(ch, e.db, e.metricMap, e.logger)
+	errMap := queryNamespaceMappings(ch, e.db, e.databaseAllowlist, e.metricMap, e.logger)
 	if len(errMap) > 0 {
 		level.Error(e.logger).Log("msg", "error querying namespace mappings", "err", errMap)
 		up = 0
